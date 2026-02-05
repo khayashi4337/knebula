@@ -46,11 +46,13 @@ for i in "${!MEMBER_NAMES[@]}"; do
 done
 
 echo ""
-echo "=== Certificates created in ./certs/ ==="
+echo "=== Certificates created in $(pwd) ==="
 echo ""
 ls -la
 echo ""
 echo "Next steps:"
-echo "  1. Keep ca.key secure (don't distribute)"
+echo "  1. Keep ca.key secure (NEVER distribute)"
 echo "  2. Copy lighthouse.crt and lighthouse.key to Lighthouse host"
 echo "  3. Copy memberX.crt, memberX.key, and ca.crt to each member"
+echo ""
+echo "Certificate validity: 10 years ($(date -d '+10 years' '+%Y-%m-%d' 2>/dev/null || echo 'check with nebula-cert print'))"

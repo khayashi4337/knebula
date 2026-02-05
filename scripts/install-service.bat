@@ -31,6 +31,15 @@ if not exist "%NEBULA_DIR%\nebula.exe" (
     exit /b 1
 )
 
+REM Check if service already exists
+sc query NebulaMember >nul 2>&1
+if %errorlevel% equ 0 (
+    echo Service NebulaMember already exists.
+    echo To reinstall, run uninstall-service.bat first.
+    pause
+    exit /b 1
+)
+
 REM Install service
 "%NEBULA_DIR%\nssm.exe" install NebulaMember "%NEBULA_DIR%\nebula.exe" -config "%NEBULA_DIR%\config.yml"
 

@@ -8,15 +8,26 @@
 #   Set-ExecutionPolicy -Scope Process Bypass
 #   .\udp-relay.ps1
 
-# Configuration - UPDATE THIS!
-# Get WSL2 IP by running 'hostname -I' in WSL2
-$wslIP = "172.31.x.x"  # <-- Change this to your WSL2 IP
+# Configuration
 $port = 4242
+
+# Auto-detect WSL2 IP (recommended) or set manually
+# Option 1: Auto-detect (uncomment the next line)
+# $wslIP = (wsl hostname -I).Trim().Split()[0]
+
+# Option 2: Manual configuration (update the IP address)
+$wslIP = "172.31.x.x"  # <-- Change this to your WSL2 IP
 
 # Validate configuration
 if ($wslIP -match "x\.x") {
-    Write-Host "ERROR: Please update `$wslIP in this script!" -ForegroundColor Red
-    Write-Host "Run 'hostname -I' in WSL2 to get the IP address." -ForegroundColor Yellow
+    Write-Host "ERROR: Please configure WSL2 IP address!" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Option 1: Auto-detect (edit this script)" -ForegroundColor Yellow
+    Write-Host "  Uncomment: `$wslIP = (wsl hostname -I).Trim().Split()[0]"
+    Write-Host ""
+    Write-Host "Option 2: Manual configuration" -ForegroundColor Yellow
+    Write-Host "  Run 'hostname -I' in WSL2 to get the IP"
+    Write-Host "  Update `$wslIP in this script"
     exit 1
 }
 
