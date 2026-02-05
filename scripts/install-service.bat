@@ -31,6 +31,22 @@ if not exist "%NEBULA_DIR%\nebula.exe" (
     exit /b 1
 )
 
+REM Check if config exists
+if not exist "%NEBULA_DIR%\config.yml" (
+    echo ERROR: config.yml not found!
+    echo Please copy and configure from configs/member.yml.example
+    pause
+    exit /b 1
+)
+
+REM Check if wintun.dll exists
+if not exist "%NEBULA_DIR%\dist\windows\wintun\bin\amd64\wintun.dll" (
+    echo ERROR: wintun.dll not found!
+    echo Expected path: %NEBULA_DIR%\dist\windows\wintun\bin\amd64\wintun.dll
+    pause
+    exit /b 1
+)
+
 REM Check if service already exists
 sc query NebulaMember >nul 2>&1
 if %errorlevel% equ 0 (
