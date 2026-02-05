@@ -50,7 +50,8 @@ WSL2 + Docker環境でサービス（Forgejo等）を立てると、多段NAT（
 ### 1. 証明書の生成（サーバ側WSL2で実行）
 
 ```bash
-# Nebulaバイナリをダウンロード・展開
+# Nebulaバイナリをダウンロード・展開（最新版は GitHub Releases で確認）
+# https://github.com/slackhq/nebula/releases
 wget https://github.com/slackhq/nebula/releases/download/v1.10.2/nebula-linux-amd64.tar.gz
 tar xzf nebula-linux-amd64.tar.gz
 
@@ -98,6 +99,7 @@ install-service.bat を右クリック → 管理者として実行
 ```
 .
 ├── README.md
+├── LICENSE                       # MIT License
 ├── configs/
 │   ├── lighthouse.yml.example    # Lighthouse設定テンプレート
 │   ├── member.yml.example        # メンバー設定テンプレート
@@ -131,13 +133,21 @@ WSL2のIPは再起動で変わることがあります。`udp-relay.ps1` 内の 
 $wslIP = (wsl hostname -I).Trim().Split()[0]
 ```
 
+## ファイアウォール設定
+
+Windows FirewallでUDP 4242の受信許可が必要な場合:
+```powershell
+netsh advfirewall firewall add rule name="Nebula UDP" dir=in action=allow protocol=UDP localport=4242
+```
+
 ## トラブルシューティング
 
 | 症状 | 原因 | 対処 |
 |------|------|------|
 | wintun driver not found | wintun.dllのパスが違う | 上記のディレクトリ構造で配置 |
-| Handshake timed out | Lighthouseに到達できない | UDPリレーが起動しているか確認 |
+| Handshake timed out | Lighthouseに到達できない | UDPリレーが起動しているか確認、ファイアウォール設定確認 |
 | Access denied | 管理者権限がない | 管理者として実行 |
+| Port already in use | 他のプロセスがポート使用中 | `netstat -ano | findstr 4242` で確認 |
 
 ## 関連リンク
 

@@ -5,6 +5,9 @@
 #
 # Run with: nebula.exe -config config.yml (as Administrator)
 # Or install as service with: install-service.bat
+#
+# IMPORTANT: wintun.dll must be placed at:
+#   <nebula.exe dir>/dist/windows/wintun/bin/amd64/wintun.dll
 
 pki:
   ca: ca.crt

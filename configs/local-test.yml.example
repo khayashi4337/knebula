@@ -3,6 +3,8 @@
 # Use this to test on the same PC as Lighthouse before distributing
 # Connects directly to WSL2 (bypasses UDP relay)
 #
+# IMPORTANT: Stop UDP relay before running local test!
+#
 # Run with: .\nebula.exe -config config-local-test.yml
 
 pki:
