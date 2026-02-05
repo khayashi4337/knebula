@@ -1,0 +1,48 @@
+# Nebula Local Test Configuration (Windows)
+# ==========================================
+# Use this to test on the same PC as Lighthouse before distributing
+# Connects directly to WSL2 (bypasses UDP relay)
+#
+# Run with: .\nebula.exe -config config-local-test.yml
+
+pki:
+  ca: ca.crt
+  cert: host.crt
+  key: host.key
+
+static_host_map:
+  # Direct connection to WSL2 (for local testing only)
+  # Update with your WSL2 IP (run 'hostname -I' in WSL2)
+  "192.168.100.1": ["172.31.x.x:4242"]
+
+lighthouse:
+  am_lighthouse: false
+  interval: 60
+  hosts:
+    - "192.168.100.1"
+
+listen:
+  host: 0.0.0.0
+  port: 4243  # Different port to avoid conflict with Lighthouse
+
+punchy:
+  punch: true
+  respond: true
+
+tun:
+  dev: nebula_test
+  mtu: 1300
+
+logging:
+  level: info
+  format: text
+
+firewall:
+  outbound:
+    - port: any
+      proto: any
+      host: any
+  inbound:
+    - port: any
+      proto: any
+      host: any

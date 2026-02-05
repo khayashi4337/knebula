@@ -1,0 +1,33 @@
+# Nebula certificates and keys (sensitive)
+*.key
+*.crt
+ca.key
+ca.crt
+
+# Nebula binaries (download from GitHub releases)
+nebula
+nebula-cert
+nebula.exe
+nebula-cert.exe
+nssm.exe
+wintun.dll
+
+# Distribution packages
+dist/
+*.zip
+*.tar.gz
+
+# Windows specific
+*.dll
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/

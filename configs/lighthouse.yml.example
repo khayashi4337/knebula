@@ -1,0 +1,44 @@
+# Nebula Lighthouse Configuration (WSL2)
+# =======================================
+# Copy this file to your nebula directory and rename to config.yml
+# Update paths to match your environment
+#
+# Run with: sudo ./nebula -config config.yml
+
+pki:
+  # Update these paths to your actual certificate locations
+  ca: /home/YOUR_USER/nebula/ca.crt
+  cert: /home/YOUR_USER/nebula/lighthouse.crt
+  key: /home/YOUR_USER/nebula/lighthouse.key
+
+lighthouse:
+  am_lighthouse: true
+  interval: 60
+
+listen:
+  host: 0.0.0.0
+  port: 4242
+
+punchy:
+  punch: true
+  respond: true
+
+tun:
+  dev: nebula1
+  mtu: 1300
+
+logging:
+  level: info
+  format: text
+
+# Firewall: Allow all traffic (suitable for trusted internal network)
+# For production, consider restricting to specific ports/hosts
+firewall:
+  outbound:
+    - port: any
+      proto: any
+      host: any
+  inbound:
+    - port: any
+      proto: any
+      host: any

@@ -1,0 +1,50 @@
+# Nebula Member Configuration (Windows)
+# ======================================
+# Copy this file to your nebula directory and rename to config.yml
+# Update static_host_map with your Lighthouse's LAN IP
+#
+# Run with: nebula.exe -config config.yml (as Administrator)
+# Or install as service with: install-service.bat
+
+pki:
+  ca: ca.crt
+  cert: host.crt
+  key: host.key
+
+static_host_map:
+  # Format: "Nebula IP": ["LAN IP:port"]
+  # Update 192.168.x.x to your Lighthouse host's actual LAN IP
+  # Find it by running 'ipconfig' on the Lighthouse Windows host
+  "192.168.100.1": ["192.168.x.x:4242"]
+
+lighthouse:
+  am_lighthouse: false
+  interval: 60
+  hosts:
+    - "192.168.100.1"
+
+listen:
+  host: 0.0.0.0
+  port: 4242
+
+punchy:
+  punch: true
+  respond: true
+
+tun:
+  dev: nebula1
+  mtu: 1300
+
+logging:
+  level: info
+  format: text
+
+firewall:
+  outbound:
+    - port: any
+      proto: any
+      host: any
+  inbound:
+    - port: any
+      proto: any
+      host: any

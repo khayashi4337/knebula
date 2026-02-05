@@ -1,0 +1,590 @@
+* 目次 [#y94c36c7]
+#contents
+
+* 型落ちノートPCでDockerサービスを公開したい ― WSL2の多段NAT地獄をNebulaで乗り越える [#fd14b54d]
+
+** はじめに [#p7d08d57]
+
+部署で余った型落ちのWindows 10ノートPC。捨てるにはもったいないが、業務の第一線で使うにはスペックが心許ない。「WSL2でDockerを動かして、チーム用のForgejoでも立てれば有効活用できるのでは？」と思いついた。専用サーバの稟議を通す必要もなく、手元ですぐ始められる。
+
+お手軽で最高――と思いきや、思わぬ落とし穴があった。''多段NAT''である。
+
+本記事では、WSL2上のDockerコンテナで立てたサービスに、同じフロアの開発メンバーからアクセスできるようにするまでに直面した多段NATの問題と、OSSのメッシュVPN ''Nebula'' で解決した話を紹介する。
+
+** WSL2の多段NAT構造 [#d3be4432]
+
+WSL2上のDockerコンテナでサービスを公開しようとすると、ネットワーク的にはこうなる。
+
+ [社内LAN上のメンバーPC]
+   └─ [ルーター / 社内NW] ← NAT①
+        └─ [Windows 10 ホスト]
+             └─ [WSL2 仮想ネットワーク] ← NAT②
+                  └─ [Docker bridge network] ← NAT③
+                       ├─ Forgejo (port 3000)
+                       └─ DinD Runner
+
+NATが3重。localhostでは動いているのに、隣の席の同僚からアクセスできない。これが多段NATの厄介さだ。
+
+** 試行錯誤：どれもしっくりこない [#m5dbd57f]
+
+いくつかの方法を試したが、どれも決め手に欠けた。
+
+*** portproxy（netsh interface portproxy） [#w54a56e4]
+
+Windows標準のポート転送機能。追加ソフト不要で手軽だが、WSL2のIPアドレスが再起動のたびに変わる。起動時にスクリプトで毎回再設定する必要があり、Windows Updateでファイアウォールがリセットされるリスクもある。さらに、''TCPのみ対応でUDPは転送できない''という制約もある。動くけど、運用が地味に辛い。
+
+*** Windows 11のミラードネットワーキング [#j67f358b]
+
+WSL2のネットワークをホストとミラーリングする機能。今回の環境はWindows 10なので、この選択肢自体が使えない。
+
+*** Tailscale [#r8d933dd]
+
+手軽さは抜群。ただしコーディネーションサーバがTailscale社に依存しており、完全なOSSではない。同じフロアの仲間内で使うだけなのに、外部サービスに依存するのは少し大げさに感じた。
+
+*** ngrok [#r167baee]
+
+一時的なデモ共有には便利だが、常時運用には向かない。
+
+** Nebulaにたどり着いた [#da5df50f]
+
+最初にAIに相談したときは、portproxyやTailscaleなど「よくある解決策」しか出てこなかった。そこで方針を変えて、解決策を直接聞くのではなく、問題点を構造的に整理する壁打ちをした。NAT越えの方式を体系的に比較していく中で、''Nebula'' というツールの存在を知った。
+
+** Nebulaとは [#p57b04f4]
+
+Nebulaは、Slackのエンジニアが社内インフラ向けに開発し、2019年にOSS化されたオーバーレイネットワークツールだ。
+
+https://slack.engineering/introducing-nebula-the-open-source-global-overlay-network-from-slack/
+
+
+|~項目|~内容|
+|ライセンス|MIT（完全OSS）|
+|開発言語|Go|
+|対応OS|Linux, macOS, Windows, iOS, Android|
+|暗号方式|Noise Protocol Framework / AES-256-GCM|
+|NATの扱い|UDPホールパンチング + Lighthouse（ディスカバリノード）|
+|本番実績|Slackで5万台以上のホストが稼働|
+|GitHub|[[slackhq/nebula>https://github.com/slackhq/nebula]]|
+
+ざっくり言うと、各マシンにNebulaをインストールして証明書を置くだけで、NATの有無に関係なく仮想的なプライベートネットワークで直接つながる。WSL2の多段NATも、Docker内のNATも、まるごとスキップできる。
+
+** 仲間内なら証明書管理は怖くない [#gc051e58]
+
+Nebulaの紹介記事を読むと「自分でCA（認証局）を作って、証明書を発行して…」という説明が出てきて、ちょっと身構えるかもしれない。実際、Nebulaの作者が設立したDefined Networking社は、この証明書管理を自動化する有料サービス（Managed Nebula）を提供しているぐらいだ。
+
+しかし、それは数百〜数千台規模でメンバーの出入りが頻繁な組織の話。同じフロアの気心知れた3人で使うなら、事情はまったく違う。
+
+*** 証明書の有効期限は自分で決められる [#x1e6c933]
+
+デフォルトは1年だが、-duration フラグで自由に設定できる。仲間内で使うだけなら、10年にしておけば実質メンテナンスフリーだ。
+
+*** 発行するのは初回の数枚だけ [#n62521c6]
+
+3人チームなら発行する証明書はこれだけだ。
+
+ # CA（認証局）を作る（10年有効）
+ nebula-cert ca -name "our-team" -duration 87600h
+
+ # 各ホスト用の証明書を発行（10年有効）
+ nebula-cert sign -name "lighthouse" -ip "192.168.100.1/24" -duration 87600h
+ nebula-cert sign -name "member1" -ip "192.168.100.2/24" -duration 87600h
+ nebula-cert sign -name "member2" -ip "192.168.100.3/24" -duration 87600h
+ nebula-cert sign -name "member3" -ip "192.168.100.4/24" -duration 87600h
+
+コマンド5つ。1分もかからない。あとはファイルを各メンバーに渡すだけ。USBメモリでもSlackのDMでも、渡し方は何でもいい。同じフロアに座っているのだから。
+
+*** CAの秘密鍵の管理も気楽でいい [#v0cb3219]
+
+大規模組織なら ca.key は厳重に暗号化して金庫に入れるべきだ。しかし仲間内の3人なら、自分のPCの適当なフォルダに保管しておけば十分だ。万が一漏れたところで、このネットワークにアクセスできるのは同じフロアにいる顔見知りだけである。
+
+*** メンバーの追加・削除 [#b30e71dd]
+
+誰かがチームに加わったら、コマンド1つで証明書を発行して渡すだけ。辞めた人がいたら、その証明書をブロックリストに追加すればいい。3人規模なら、そもそも滅多に発生しないイベントだ。
+
+** 同一LANならLighthouseも手元でいい [#w087c7f9]
+
+Nebulaのネットワークには、ノード同士がお互いを発見するための Lighthouse（灯台）が必要だ。インターネット越しに使う場合はVPSなどに置く必要があるが、全員が同じ社内LANにいるなら、Forgejoを動かしている型落ちノートPC自身をLighthouseにしてしまえばいい。追加のサーバは不要だ。
+
+** 構成まとめ [#vb5b698d]
+
+最終的な構成はこうなる。
+
+ [社内LAN: 192.168.179.0/24]
+  │
+  ├─ 型落ちノートPC (192.168.179.17)
+  │    │
+  │    ├─ [Windows側]
+  │    │    └─ UDPリレー (UDP 4242 → WSL2へ転送)
+  │    │
+  │    └─ [WSL2側]
+  │         ├─ Nebula Lighthouse (192.168.100.1)
+  │         └─ Docker
+  │              ├─ Forgejo (port 3000)
+  │              └─ DinD Runner
+  │
+  ├─ メンバー1 PC ── Nebula (192.168.100.2)
+  ├─ メンバー2 PC ── Nebula (192.168.100.3)
+  └─ メンバー3 PC ── Nebula (192.168.100.4)
+
+各メンバーは http://192.168.100.1:3000 でForgejoにアクセスする。NATが何重だろうが関係ない。Nebulaのオーバーレイネットワークがすべてをバイパスしてくれる。
+
+''ポイント'': NebulaをWSL2で動かすことで、Dockerと同じネットワークスタックに配置。これにより、Nebula経由のアクセスが自然にDockerコンテナに到達する。ただし、外部からのUDP接続をWSL2に転送するためのUDPリレーがWindows側で必要になる。
+
+** 検証：実際にやってみた [#y0568e53]
+
+*** 検証環境 [#f1f94938]
+
+|~項目|~内容|
+|ホストOS|Windows 10 Pro|
+|WSL2|Ubuntu 24.04 LTS|
+|Docker|Docker Engine on WSL2|
+|サービス|Forgejo 9 + Forgejo Runner (DinD)|
+|Nebula|v1.10.2|
+|クライアント|同一フロアのWindows PC × 3台|
+
+*** ステップ1: Nebulaバイナリの準備 [#step1]
+
+[[GitHub Releases>https://github.com/slackhq/nebula/releases]]から以下をダウンロード:
+- Linux版（WSL2用）: nebula-linux-amd64.tar.gz
+- Windows版（メンバー用）: nebula-windows-amd64.zip
+
+ # WSL2で作業ディレクトリを作成
+ mkdir -p ~/nebula
+ cd ~/nebula
+
+ # Linux版を展開
+ tar xzf nebula-linux-amd64.tar.gz
+
+ # Windows版も展開してメンバー配布用に準備
+ mkdir -p windows
+ unzip nebula-windows-amd64.zip -d windows/
+
+*** ステップ2: CA・証明書の発行 [#step2]
+
+ cd ~/nebula
+
+ # CA作成（10年有効）
+ ./nebula-cert ca -name "our-team" -duration 87600h
+
+ # Lighthouse用
+ ./nebula-cert sign -name "lighthouse" -ip "192.168.100.1/24" -duration 87600h
+
+ # メンバー用
+ ./nebula-cert sign -name "member1" -ip "192.168.100.2/24" -duration 87600h
+ ./nebula-cert sign -name "member2" -ip "192.168.100.3/24" -duration 87600h
+ ./nebula-cert sign -name "member3" -ip "192.168.100.4/24" -duration 87600h
+
+証明書の確認:
+
+ ./nebula-cert print -path lighthouse.crt
+
+出力例:
+
+ {
+   "details": {
+     "name": "lighthouse",
+     "networks": ["192.168.100.1/24"],
+     "notAfter": "2036-02-03T...",
+     "notBefore": "2026-02-05T..."
+   }
+ }
+
+*** ステップ3: Lighthouse設定ファイル作成（WSL2用） [#step3]
+
+~/nebula/config-lighthouse.yml を作成:
+
+ pki:
+   ca: /home/YOUR_USER/nebula/ca.crt
+   cert: /home/YOUR_USER/nebula/lighthouse.crt
+   key: /home/YOUR_USER/nebula/lighthouse.key
+
+ lighthouse:
+   am_lighthouse: true
+   interval: 60
+
+ listen:
+   host: 0.0.0.0
+   port: 4242
+
+ punchy:
+   punch: true
+   respond: true
+
+ tun:
+   dev: nebula1
+   mtu: 1300
+
+ logging:
+   level: info
+   format: text
+
+ firewall:
+   outbound:
+     - port: any
+       proto: any
+       host: any
+   inbound:
+     - port: any
+       proto: any
+       host: any
+
+※YOUR_USER は実際のユーザー名に置き換える。
+
+*** ステップ4: メンバー用設定ファイル作成 [#step4]
+
+windows/config.yml を作成（メンバー配布用）:
+
+ pki:
+   ca: ca.crt
+   cert: host.crt
+   key: host.key
+
+ static_host_map:
+   # LighthouseのNebula IP: サーバPCのLAN IP
+   "192.168.100.1": ["192.168.179.17:4242"]
+
+ lighthouse:
+   am_lighthouse: false
+   interval: 60
+   hosts:
+     - "192.168.100.1"
+
+ listen:
+   host: 0.0.0.0
+   port: 4242
+
+ punchy:
+   punch: true
+   respond: true
+
+ tun:
+   dev: nebula1
+   mtu: 1300
+
+ logging:
+   level: info
+   format: text
+
+ firewall:
+   outbound:
+     - port: any
+       proto: any
+       host: any
+   inbound:
+     - port: any
+       proto: any
+       host: any
+
+''注意'': static_host_map の 192.168.179.17 は、Lighthouseを動かすWindowsホストのLAN IPに置き換える。確認方法: コマンドプロンプトで ipconfig を実行。
+
+*** ステップ5: UDPリレースクリプト作成（Windows用） [#step5]
+
+NebulaはUDPで通信するが、netsh portproxyはTCPのみ対応。そのため、PowerShellでUDPリレーを動かす必要がある。
+
+C:\nebula\udp-relay.ps1 を作成:
+
+ # UDP Relay: Forward UDP 4242 to WSL2
+ # Run as Administrator
+
+ $wslIP = "172.31.58.140"  # WSL2のIP（WSL2で hostname -I で確認）
+ $port = 4242
+
+ Write-Host "=== Nebula UDP Relay ===" -ForegroundColor Green
+ Write-Host "Listening on 0.0.0.0:$port"
+ Write-Host "Forwarding to ${wslIP}:$port"
+ Write-Host "Press Ctrl+C to stop" -ForegroundColor Yellow
+ Write-Host ""
+
+ $listener = New-Object System.Net.Sockets.UdpClient($port)
+ $listener.Client.ReceiveTimeout = 1000
+ $wslEndpoint = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($wslIP), $port)
+ $clients = @{}
+
+ while ($true) {
+     try {
+         $clientEP = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+         $data = $listener.Receive([ref]$clientEP)
+         $clientKey = $clientEP.ToString()
+         $now = Get-Date
+
+         if ($clientEP.Address.ToString() -eq $wslIP) {
+             foreach ($key in $clients.Keys) {
+                 $listener.Send($data, $data.Length, $clients[$key].Endpoint) | Out-Null
+                 Write-Host "$(Get-Date -Format 'HH:mm:ss') <- WSL2 -> $key ($($data.Length) bytes)"
+             }
+         } else {
+             $clients[$clientKey] = @{Endpoint = $clientEP; LastSeen = $now}
+             $listener.Send($data, $data.Length, $wslEndpoint) | Out-Null
+             Write-Host "$(Get-Date -Format 'HH:mm:ss') $clientKey -> WSL2 ($($data.Length) bytes)"
+         }
+
+         $cutoff = $now.AddMinutes(-5)
+         $oldClients = $clients.Keys | Where-Object { $clients[$_].LastSeen -lt $cutoff }
+         foreach ($old in $oldClients) { $clients.Remove($old) }
+     }
+     catch [System.Net.Sockets.SocketException] { }
+     catch { Write-Host "Error: $_" -ForegroundColor Red }
+ }
+
+''注意'': $wslIP はWSL2のIPアドレス。WSL2で hostname -I を実行して確認し、スクリプト内の値を更新する。
+
+*** ステップ6: メンバー用配布セット作成 [#step6]
+
+各メンバー用にフォルダを作成:
+
+ mkdir -p dist/member1 dist/member2 dist/member3
+
+ for i in 1 2 3; do
+   cp windows/nebula.exe dist/member${i}/
+   cp ca.crt dist/member${i}/
+   cp member${i}.crt dist/member${i}/host.crt
+   cp member${i}.key dist/member${i}/host.key
+   cp windows/config.yml dist/member${i}/
+   # wintun.dllのディレクトリ構造を作成
+   mkdir -p dist/member${i}/dist/windows/wintun/bin/amd64
+   cp windows/dist/windows/wintun/bin/amd64/wintun.dll \
+      dist/member${i}/dist/windows/wintun/bin/amd64/
+ done
+
+''重要'': Windows版Nebulaはwintun.dllが必要。Nebulaは特定のパスでwintun.dllを探すため、以下のディレクトリ構造で配置する:
+
+ member1/
+ ├── nebula.exe
+ ├── config.yml
+ ├── ca.crt
+ ├── host.crt
+ ├── host.key
+ └── dist/
+     └── windows/
+         └── wintun/
+             └── bin/
+                 └── amd64/
+                     └── wintun.dll
+
+wintunはNebulaのWindows版リリースに同梱されている。
+
+配布用にzip化（PowerShellで）:
+
+ cd dist
+ Compress-Archive -Path member1 -DestinationPath nebula-member1.zip
+ Compress-Archive -Path member2 -DestinationPath nebula-member2.zip
+ Compress-Archive -Path member3 -DestinationPath nebula-member3.zip
+
+Google DriveやSlack等で各メンバーに配布する。
+
+*** ステップ7: サーバー側の起動（起動順序が重要） [#step7]
+
+'''1. WSL2でLighthouseを起動'''
+
+ cd ~/nebula
+ sudo ./nebula -config config-lighthouse.yml
+
+正常起動時のログ:
+
+ level=info msg="Nebula interface is active" interface=nebula1 networks="[192.168.100.1/24]" udpAddr="0.0.0.0:4242"
+
+'''2. Windows側でUDPリレーを起動'''
+
+''別のターミナル''で、管理者権限のPowerShellを開いて:
+
+ cd C:\nebula
+ Set-ExecutionPolicy -Scope Process Bypass
+ .\udp-relay.ps1
+
+表示例:
+
+ === Nebula UDP Relay ===
+ Listening on 0.0.0.0:4242
+ Forwarding to 172.31.58.140:4242
+
+*** ステップ8: ローカルテストで動作確認 [#step8]
+
+メンバーに配布する前に、サーバーPC上でローカルテストを行う。これにより、メンバーに渡す前に問題を発見できる。
+
+ローカルテスト用設定ファイル C:\nebula\config-local-test.yml を作成:
+
+ pki:
+   ca: ca.crt
+   cert: host.crt
+   key: host.key
+
+ static_host_map:
+   # ローカルテストはWSL2に直接接続
+   "192.168.100.1": ["172.31.58.140:4242"]
+
+ lighthouse:
+   am_lighthouse: false
+   interval: 60
+   hosts:
+     - "192.168.100.1"
+
+ listen:
+   host: 0.0.0.0
+   port: 4243  # Lighthouseと競合しないよう別ポート
+
+ punchy:
+   punch: true
+   respond: true
+
+ tun:
+   dev: nebula_test
+   mtu: 1300
+
+ logging:
+   level: info
+   format: text
+
+ firewall:
+   outbound:
+     - port: any
+       proto: any
+       host: any
+   inbound:
+     - port: any
+       proto: any
+       host: any
+
+member1の証明書をC:\nebulaにコピー:
+
+ copy dist\member1\host.crt C:\nebula\
+ copy dist\member1\host.key C:\nebula\
+ copy dist\member1\ca.crt C:\nebula\
+
+''重要: UDPリレーを停止（Ctrl+C）してから''テストを実行する。ローカルテストではWSL2に直接接続するため、UDPリレーは不要。
+
+管理者権限のPowerShellで:
+
+ cd C:\nebula
+ .\nebula.exe -config config-local-test.yml
+
+正常接続時のログ:
+
+ level=info msg="Handshake message received" certName=lighthouse ...
+ level=info msg="Nebula interface is active" networks="[192.168.100.2/24]"
+
+別のコマンドプロンプトで確認:
+
+ ping 192.168.100.1
+ curl http://192.168.100.1:3000
+
+ブラウザで http://192.168.100.1:3000 を開き、Forgejoが表示されれば成功。
+
+''テスト完了後'': テスト用Nebulaを停止（Ctrl+C）し、''UDPリレーを再起動''する。外部メンバーの接続にはUDPリレーが必要。
+
+*** ステップ9: メンバーPCでの起動 [#step9]
+
+メンバーは配布されたzipファイルを展開し、管理者権限のコマンドプロンプトで実行:
+
+ cd C:\nebula\member1
+ nebula.exe -config config.yml
+
+正常接続時のログ:
+
+ level=info msg="Handshake message received" certName=lighthouse ...
+ level=info msg="Nebula interface is active" networks="[192.168.100.2/24]"
+
+*** ステップ10: 接続確認 [#step10]
+
+メンバーPCから:
+
+ ping 192.168.100.1
+
+ブラウザで http://192.168.100.1:3000 を開き、Forgejoが表示されれば成功。
+
+*** 検証結果 [#c9268ba0]
+
+|~テスト項目|~結果|
+|WSL2でLighthouse起動|OK|
+|UDPリレー起動|OK|
+|ローカルテスト（同一PC）|OK|
+|メンバーからのHandshake|OK|
+|ping 192.168.100.1|OK (TTL=64, <1ms)|
+|Forgejo Web UI (http://192.168.100.1:3000)|OK|
+|git clone via SSH (port 2222)|OK|
+
+** メンバー向けクイックスタート [#quickstart]
+
+配布されたzipファイルを受け取ったメンバー向けの手順:
+
++zipファイルを C:\nebula に展開
++''管理者権限''でコマンドプロンプトを開く
++以下を実行:
+ cd C:\nebula\member1
+ nebula.exe -config config.yml
++「Handshake message received」と表示されれば接続成功
++ブラウザで http://192.168.100.1:3000 を開く
++Forgejoが表示されれば完了
+
+** ハマりポイントと対処法 [#trouble]
+
+*** wintun.dll not found [#wintun]
+
+症状:
+
+ Failed to get a tun/tap device" error="can not load the wintun driver
+
+Nebulaは特定のパスでwintun.dllを探す。nebula.exeと同じフォルダに置いても見つからない。以下の構造で配置:
+
+ C:\nebula\dist\windows\wintun\bin\amd64\wintun.dll
+
+*** netsh portproxyが効かない [#portproxy]
+
+netsh portproxyはTCPのみ対応。NebulaはUDPを使うため、PowerShellのUDPリレーが必要。
+
+また、netsh portproxyをNebulaの仮想インターフェース（192.168.100.1）に対して設定しても機能しなかった。これはTUN/TAPデバイスの特性によるもの。解決策として、NebulaをWSL2で動かし、Dockerと同じネットワークスタックに配置した。
+
+*** WSL2のIPが変わる [#wslip]
+
+WSL2のIPは再起動で変わることがある。UDPリレーのスクリプト内の $wslIP を更新する必要がある。
+
+起動時に自動取得する場合:
+
+ $wslIP = (wsl hostname -I).Trim().Split()[0]
+
+*** 管理者権限が必要 [#admin]
+
+Nebulaは仮想ネットワークインターフェースを作成するため、Windows/Linux両方で管理者権限（sudo）が必要。
+
+** 運用Tips [#tips]
+
+*** サーバー起動チェックリスト [#checklist]
+
+毎回の起動時に確認すること:
+
++WSL2が起動していること
++WSL2でNebulaが起動していること（sudo ./nebula -config ...）
++Windows側でUDPリレーが起動していること（.\udp-relay.ps1）
+
+*** 自動起動の設定 [#autostart]
+
+WSL2側のNebulaはsystemdサービス化、Windows側のUDPリレーはタスクスケジューラで自動起動できる。
+
+*** ファイアウォール [#firewall]
+
+Windows FirewallでUDP 4242の受信を許可する必要がある場合:
+
+ netsh advfirewall firewall add rule name="Nebula UDP" dir=in action=allow protocol=UDP localport=4242
+
+** 所感 [#i55b258e]
+
+型落ちノートPCの有効活用という軽い気持ちで始めたが、WSL2の多段NATは想像以上に厄介だった。portproxyのスクリプト化やミラードモードなど、対症療法を繰り返していたら、おそらくどこかで嫌になっていたと思う。
+
+Nebulaは、この問題をオーバーレイネットワークで根本的に解決してくれる。しかもMITライセンスの完全OSSだ。
+
+証明書管理が大変そうに見えるのがNebulaのとっつきにくさだが、仲間内で使う分には有効期限を10年にして最初に数枚発行すれば、あとはほぼ放置でいい。同じフロアの顔見知り同士なら、セキュリティもそこまで神経質にならなくていい。
+
+WSL2でNebulaを動かす場合のUDPリレーは少し面倒だが、一度設定すれば安定して動作する。Windows側でNebulaを直接動かす選択肢もあるが、その場合はDockerへのポートフォワーディングで別の問題が発生するため、WSL2側で動かすのがシンプルだった。
+
+同じようにWSL2のNAT越えで困っている方は、選択肢のひとつとして検討してみてほしい。
+
+** 補足：もっと本格的に使いたくなったら [#o1554add]
+
+Nebulaの作者が設立したDefined Networking社が提供する ''Managed Nebula'' というサービスがある。証明書の自動管理、Web UI、SSO連携が付いて、100デバイスまで無料（クレジットカード不要）で使える。チームが大きくなったり、リモートワークで社外からもアクセスしたくなったりしたときの次のステップとして覚えておくと良い。
+
+-[[Defined Networking（Managed Nebula）>https://www.defined.net/]]
+
+** 参考リンク [#z599c6ad]
+
+-[[Nebula公式ドキュメント>https://nebula.defined.net/docs/]]
+-[[GitHub: slackhq/nebula>https://github.com/slackhq/nebula]]
+-[[Introducing Nebula（Slack Engineering Blog）>https://slack.engineering/introducing-nebula-the-open-source-global-overlay-network-from-slack/]]
+-[[Wintun（Windows TUN driver）>https://www.wintun.net/]]
